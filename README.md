@@ -1,24 +1,58 @@
-# Saperka vs Kurierzy — wersja Streamlit
+# Saperka vs Kurierzy — Streamlit z nickiem, IP i rankingiem
 
-## Jak odpalić lokalnie
+## Co jest dodane
+
+- Przy pierwszym wejściu z danego IP użytkownik musi podać nick.
+- Aplikacja zapisuje:
+  - nick,
+  - wynik,
+  - datę,
+  - hash IP, a nie surowe IP.
+- Po zakończeniu gry wynik sam zapisuje się do rankingu.
+- DPD daje 20 pkt, reszta daje 10 pkt.
+
+## Pliki
+
+- `app.py` — backend Streamlit, formularz nicku, SQLite, ranking.
+- `frontend/index.html` — gra jako własny komponent Streamlit.
+- `requirements.txt` — zależności.
+- `scores.sqlite3` — utworzy się automatycznie po pierwszym uruchomieniu.
+
+## Uruchomienie lokalnie
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Jak wrzucić, żeby działało ciągle
+## Publikacja na Streamlit Community Cloud
 
-1. Załóż konto na GitHub, jeśli go nie masz.
-2. Stwórz nowe repozytorium, np. `saperka-vs-kurierzy`.
-3. Wrzuć do repozytorium te pliki:
+1. Załóż repozytorium na GitHubie.
+2. Wrzuć do niego:
    - `app.py`
-   - `index.html`
+   - folder `frontend`
    - `requirements.txt`
-4. Wejdź na Streamlit Community Cloud.
-5. Połącz konto z GitHubem.
-6. Wybierz repozytorium, branch `main` i plik startowy `app.py`.
-7. Kliknij Deploy.
-8. Dostaniesz link w stylu `twoja-nazwa.streamlit.app`.
+3. Wejdź na Streamlit Community Cloud.
+4. Wybierz repozytorium, branch `main`, plik startowy `app.py`.
+5. Kliknij Deploy.
 
-Link będzie działał cały czas, dopóki aplikacji nie usuniesz albo nie wyłączysz hostingu.
+## Ważne o trwałości rankingu
+
+Ta wersja używa lokalnego SQLite. To jest OK do testów i prostych wdrożeń, ale na darmowym Streamlit Community Cloud pliki tworzone przez aplikację mogą nie przetrwać restartu/redeployu kontenera.
+
+Jeśli ranking ma być naprawdę trwały, podłącz zewnętrzną bazę:
+- Supabase/Postgres,
+- Neon,
+- Google Sheets,
+- Firebase,
+- S3/R2.
+
+## Sekret do hashowania IP
+
+W Streamlit Secrets ustaw:
+
+```toml
+IP_HASH_SALT = "tu-wpisz-dlugi-losowy-sekret"
+```
+
+Bez tego aplikacja też działa, ale lepiej zmienić sekret przed publicznym udostępnieniem.
