@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Saperka vs Kurierzy — mini gra</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #111;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
+      touch-action: none;
+    }
+
+    #wrap {
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at center, #222 0%, #101010 65%, #070707 100%);
+    }
+
+    canvas {
+      width: min(100vw, 1100px);
+      height: min(100vh, 700px);
+      max-width: 100vw;
+      max-height: 100vh;
+      background: #1c1c1c;
+      box-shadow: 0 0 40px rgba(0,0,0,.65);
+      border-radius: 16px;
+      cursor: crosshair;
+    }
+
+    #hint {
+      position: fixed;
+      left: 12px;
+      bottom: 10px;
+      right: 12px;
+      text-align: center;
+      font-size: 13px;
+      opacity: .75;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="1100" height="700"></canvas>
+</div>
+<div id="hint">Sterowanie: mysz/touch = celowanie, klik/Spacja = rzut saperką, R = restart</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+
+  const couriers = [
+    { name: "DPD", points: 20, body: "#e6e6e6", stripe: "#c8001d", text: "#222" },
+    { name: "InPost", points: 10, body: "#ffd21f", stripe: "#111", text: "#111" },
+    { name: "Poczta Polska", points: 10, body: "#fff4d0", stripe: "#d6001c", text: "#b00014" },
+    { name: "Orlen Paczka", points: 10, body: "#f5f5f5", stripe: "#e00016", text: "#111" }
+  ];
+
+  let player;
+  let shovels;
+  let cars;
+  let particles;
+  let score;
+  let lives;
+  let level;
+  let spawnTimer;
+  let gameOver;
+  let started;
+  let aimX;
+  let aimY;
+  let shake;
+  let best = Number(localStorage.getItem("saperka_best") || 0);
+
+  function reset() {
+    player = { x: W / 2, y: H - 62, cooldown: 0 };
+    shovels = [];
+    cars = [];
+    particles = [];
+    score = 0;
+    lives = 5;
+    level = 1;
+    spawnTimer = 0;
+    gameOver = false;
+    started = false;
+    aimX = W / 2;
+    aimY = H / 2;
+    shake = 0;
+  }
+
+  function rnd(min, max) {
+    return Math.random() * (max - min) + min;
+  }
+
+  function pickCourier() {
+    // Trochę częściej pojawia się DPD, bo jest warte podwójne punkty.
+    const bag = [couriers[0], couriers[0], couriers[1], couriers[2], couriers[3]];
+    return bag[Math.floor(Math.random() * bag.length)];
+  }
+
+  function spawnCar() {
+    const c = pickCourier();
+    const laneY = rnd(100, H - 210);
+    const fromLeft = Math.random() < 0.5;
+    const speed = rnd(2.0, 3.9) + level * 0.25;
+    cars.push({
+      x: fromLeft ? -170 : W + 170,
+      y: laneY,
+      w: 146,
+      h: 62,
+      vx: fromLeft ? speed : -speed,
+      courier: c,
+      hit: false,
+      wobble: rnd(0, Math.PI * 2)
+    });
+  }
+
+  function throwShovel() {
+    if (gameOver) {
+      reset();
+      return;
+    }
+
+    started = true;
+
+    if (player.cooldown > 0) return;
+    player.cooldown = 13;
+
+    const dx = aimX - player.x;
+    const dy = aimY - player.y;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    const speed = 13.5;
+
+    shovels.push({
+      x: player.x,
+      y: player.y - 20,
+      vx: dx / len * speed,
+      vy: dy / len * speed,
+      rot: Math.atan2(dy, dx),
+      spin: 0.33,
+      life: 100
+    });
+  }
+
+  function addBurst(x, y, label, good) {
+    for (let i = 0; i < 18; i++) {
+      particles.push({
+        x, y,
+        vx: rnd(-4, 4),
+        vy: rnd(-5, 2),
+        life: rnd(22, 44),
+        size: rnd(2, 6),
+        label: null,
+        good
+      });
+    }
+    particles.push({
+      x,
+      y: y - 10,
+      vx: 0,
+      vy: -1.4,
+      life: 48,
+      size: 18,
+      label,
+      good
+    });
+  }
+
+  function rectCircleHit(rect, px, py, radius) {
+    const cx = Math.max(rect.x, Math.min(px, rect.x + rect.w));
+    const cy = Math.max(rect.y, Math.min(py, rect.y + rect.h));
+    return Math.hypot(px - cx, py - cy) < radius;
+  }
+
+  function update() {
+    if (player.cooldown > 0) player.cooldown--;
+
+    if (!gameOver && started) {
+      spawnTimer--;
+      const spawnEvery = Math.max(28, 82 - level * 5);
+      if (spawnTimer <= 0) {
+        spawnCar();
+        spawnTimer = spawnEvery;
+      }
+
+      level = 1 + Math.floor(score / 120);
+    }
+
+    for (const car of cars) {
+      car.x += car.vx;
+      car.wobble += 0.1;
+    }
+
+    for (const s of shovels) {
+      s.x += s.vx;
+      s.y += s.vy;
+      s.rot += s.spin;
+      s.life--;
+    }
+
+    for (const p of particles) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.11;
+      p.life--;
+    }
+
+    for (const car of cars) {
+      if (car.hit) continue;
+
+      for (const s of shovels) {
+        if (s.life <= 0) continue;
+        if (rectCircleHit(car, s.x, s.y, 18)) {
+          car.hit = true;
+          s.life = 0;
+          score += car.courier.points;
+          best = Math.max(best, score);
+          localStorage.setItem("saperka_best", String(best));
+          addBurst(
+            car.x + car.w / 2,
+            car.y + car.h / 2,
+            `+${car.courier.points} ${car.courier.name}`,
+            true
+          );
+          shake = 7;
+          break;
+        }
+      }
+    }
+
+    const before = lives;
+    cars = cars.filter(car => {
+      if (car.hit) return false;
+      const gone = (car.vx > 0 && car.x > W + 190) || (car.vx < 0 && car.x < -210);
+      if (gone && started && !gameOver) {
+        lives--;
+        addBurst(car.vx > 0 ? W - 70 : 70, car.y + 25, "-1 życie", false);
+      }
+      return !gone;
+    });
+
+    if (before !== lives) shake = 5;
+    if (lives <= 0) gameOver = true;
+
+    shovels = shovels.filter(s =>
+      s.life > 0 && s.x > -70 && s.x < W + 70 && s.y > -80 && s.y < H + 80
+    );
+    particles = particles.filter(p => p.life > 0);
+
+    if (shake > 0) shake *= 0.83;
+  }
+
+  function drawRoad() {
+    ctx.fillStyle = "#242424";
+    ctx.fillRect(0, 70, W, H - 170);
+
+    ctx.strokeStyle = "rgba(255,255,255,.18)";
+    ctx.lineWidth = 4;
+    ctx.setLineDash([34, 30]);
+
+    for (let y = 150; y < H - 170; y += 96) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+      ctx.stroke();
+    }
+
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#171717";
+    ctx.fillRect(0, 0, W, 70);
+    ctx.fillRect(0, H - 100, W, 100);
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawCar(car) {
+    const c = car.courier;
+    const flip = car.vx < 0;
+    const x = car.x;
+    const y = car.y + Math.sin(car.wobble) * 2;
+
+    ctx.save();
+
+    // Cień
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    roundRect(x + 8, y + car.h - 3, car.w - 16, 14, 8);
+    ctx.fill();
+
+    // Nadwozie
+    ctx.fillStyle = c.body;
+    roundRect(x, y + 9, car.w, car.h - 13, 13);
+    ctx.fill();
+
+    // Kabina
+    ctx.fillStyle = c.body;
+    roundRect(flip ? x + 10 : x + car.w - 58, y, 55, 39, 10);
+    ctx.fill();
+
+    // Pasek brandowy
+    ctx.fillStyle = c.stripe;
+    ctx.fillRect(x + 10, y + 32, car.w - 20, 12);
+
+    // Okna
+    ctx.fillStyle = "rgba(60,160,220,.75)";
+    roundRect(flip ? x + 19 : x + car.w - 47, y + 8, 30, 21, 5);
+    ctx.fill();
+
+    // Koła
+    ctx.fillStyle = "#111";
+    ctx.beginPath();
+    ctx.arc(x + 32, y + car.h - 2, 13, 0, Math.PI * 2);
+    ctx.arc(x + car.w - 31, y + car.h - 2, 13, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#777";
+    ctx.beginPath();
+    ctx.arc(x + 32, y + car.h - 2, 5, 0, Math.PI * 2);
+    ctx.arc(x + car.w - 31, y + car.h - 2, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // "Logo" jako czytelny napis
+    ctx.fillStyle = c.text;
+    ctx.font = c.name === "Poczta Polska" ? "bold 15px system-ui" : "bold 22px system-ui";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(c.name, x + car.w / 2, y + 25);
+
+    if (c.name === "DPD") {
+      ctx.fillStyle = "#c8001d";
+      ctx.font = "bold 12px system-ui";
+      ctx.fillText("x2 pkt", x + car.w / 2, y + 47);
+    }
+
+    ctx.restore();
+  }
+
+  function drawShovel(s) {
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(s.rot + Math.PI / 2);
+
+    // Rączka
+    ctx.strokeStyle = "#8b5a2b";
+    ctx.lineWidth = 6;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(0, 18);
+    ctx.lineTo(0, -26);
+    ctx.stroke();
+
+    // Uchwyt
+    ctx.strokeStyle = "#d6a15b";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 24, 9, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Łopatka
+    ctx.fillStyle = "#b9c0c7";
+    ctx.strokeStyle = "#6f7a84";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-13, -28);
+    ctx.quadraticCurveTo(0, -47, 13, -28);
+    ctx.lineTo(8, -10);
+    ctx.lineTo(-8, -10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawPlayer() {
+    const x = player.x;
+    const y = player.y;
+
+    // Celownik
+    ctx.strokeStyle = "rgba(255,255,255,.35)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 25);
+    ctx.lineTo(aimX, aimY);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Postać
+    ctx.fillStyle = "#eee";
+    ctx.beginPath();
+    ctx.arc(0, -28, 17, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#2d7";
+    roundRect(-18, -12, 36, 42, 12);
+    ctx.fill();
+
+    ctx.strokeStyle = "#eee";
+    ctx.lineWidth = 8;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(-12, 22);
+    ctx.lineTo(-20, 45);
+    ctx.moveTo(12, 22);
+    ctx.lineTo(20, 45);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      const alpha = Math.max(0, p.life / 48);
+      if (p.label) {
+        ctx.globalAlpha = alpha;
+        ctx.font = "bold 22px system-ui";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = p.good ? "#fff" : "#ffb4b4";
+        ctx.strokeStyle = "rgba(0,0,0,.75)";
+        ctx.lineWidth = 4;
+        ctx.strokeText(p.label, p.x, p.y);
+        ctx.fillText(p.label, p.x, p.y);
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.good ? "#f5f5f5" : "#ff6b6b";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  function drawHud() {
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 26px system-ui";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`Punkty: ${score}`, 24, 35);
+
+    ctx.font = "18px system-ui";
+    ctx.fillText(`Rekord: ${best}`, 190, 36);
+    ctx.fillText(`Poziom: ${level}`, 320, 36);
+
+    ctx.textAlign = "right";
+    ctx.fillText(`Życia: ${"❤".repeat(Math.max(0, lives))}`, W - 24, 36);
+
+    ctx.textAlign = "center";
+    ctx.font = "bold 16px system-ui";
+    ctx.fillStyle = "rgba(255,255,255,.75)";
+    ctx.fillText("DPD = 20 pkt, reszta = 10 pkt", W / 2, 36);
+  }
+
+  function drawStartOrGameOver() {
+    if (!started && !gameOver) {
+      ctx.fillStyle = "rgba(0,0,0,.45)";
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "bold 54px system-ui";
+      ctx.fillText("Saperka vs Kurierzy", W / 2, H / 2 - 70);
+
+      ctx.font = "22px system-ui";
+      ctx.fillText("Kliknij albo naciśnij Spację, żeby rzucić saperką", W / 2, H / 2 - 15);
+
+      ctx.font = "18px system-ui";
+      ctx.fillStyle = "rgba(255,255,255,.78)";
+      ctx.fillText("Trafiaj auta z napisami firm. Za DPD dostajesz podwójne punkty.", W / 2, H / 2 + 28);
+    }
+
+    if (gameOver) {
+      ctx.fillStyle = "rgba(0,0,0,.58)";
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "bold 58px system-ui";
+      ctx.fillText("Koniec gry", W / 2, H / 2 - 72);
+
+      ctx.font = "bold 30px system-ui";
+      ctx.fillText(`Wynik: ${score}`, W / 2, H / 2 - 20);
+
+      ctx.font = "20px system-ui";
+      ctx.fillText("Kliknij, Spacja albo R, żeby zagrać jeszcze raz", W / 2, H / 2 + 34);
+    }
+  }
+
+  function render() {
+    ctx.save();
+
+    if (shake > 0.4) {
+      ctx.translate(rnd(-shake, shake), rnd(-shake, shake));
+    }
+
+    ctx.clearRect(0, 0, W, H);
+    drawRoad();
+
+    for (const car of cars) drawCar(car);
+    for (const s of shovels) drawShovel(s);
+    drawPlayer();
+    drawParticles();
+    drawHud();
+    drawStartOrGameOver();
+
+    ctx.restore();
+  }
+
+  function loop() {
+    update();
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  function pointerToCanvas(e) {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    aimX = (clientX - rect.left) / rect.width * W;
+    aimY = (clientY - rect.top) / rect.height * H;
+  }
+
+  canvas.addEventListener("mousemove", pointerToCanvas);
+  canvas.addEventListener("touchmove", e => {
+    e.preventDefault();
+    pointerToCanvas(e);
+  }, { passive: false });
+
+  canvas.addEventListener("mousedown", e => {
+    pointerToCanvas(e);
+    throwShovel();
+  });
+
+  canvas.addEventListener("touchstart", e => {
+    e.preventDefault();
+    pointerToCanvas(e);
+    throwShovel();
+  }, { passive: false });
+
+  window.addEventListener("keydown", e => {
+    if (e.code === "Space") {
+      e.preventDefault();
+      throwShovel();
+    }
+    if (e.key.toLowerCase() === "r") reset();
+  });
+
+  reset();
+  loop();
+})();
+</script>
+</body>
+</html>
